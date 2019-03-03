@@ -13,8 +13,13 @@
 
 #include "ftdi.h"
 
-#define BTN_PIN 4	//for bootloader entry.
+#define BTN_PIN 4 //for bootloader entry.
 SBIT(BTN, 0x90, BTN_PIN);
+
+SBIT(TMS, 0x90, 4);
+SBIT(TCK, 0x90, 5);
+SBIT(TDI, 0x90, 6);
+SBIT(TDO, 0x90, 7);
 
 __xdata __at(0x0100) uint8_t Ep0Buffer[0x08]; //端点0 OUT&IN缓冲区，必须是偶地址
 __xdata __at(0x0140) uint8_t Ep1Buffer[0x40]; //端点1 IN缓冲区
@@ -23,28 +28,29 @@ __xdata __at(0x0180) uint8_t Ep2Buffer[0x40]; //端点2 OUT缓冲区,必须是�
 uint16_t SetupLen;
 uint8_t SetupReq, Count, UsbConfig;
 uint8_t vendor_control;
+uint8_t send_dummy;
+
 const uint8_t *pDescr;	 //USB配置标志
 USB_SETUP_REQ SetupReqBuf; //暂存Setup包
 #define UsbSetupBuf ((PUSB_SETUP_REQ)Ep0Buffer)
 
 __code uint8_t ftdi_rom[] = {
-	0x00, 0x00, 0xfb, 0x09, 0x01, 0x60, 0x00, 0x04, 
-	0x80, 0xe1, 0x1c, 0x00, 0x00, 0x02, 0x94, 0x0e, 
-	0xa2, 0x18, 0xba, 0x12, 0x0e, 0x03, 0x41, 0x00, 
+	0x00, 0x00, 0xfb, 0x09, 0x01, 0x60, 0x00, 0x04,
+	0x80, 0xe1, 0x1c, 0x00, 0x00, 0x02, 0x94, 0x0e,
+	0xa2, 0x18, 0xba, 0x12, 0x0e, 0x03, 0x41, 0x00,
 	0x6c, 0x00, 0x74, 0x00, 0x65, 0x00, 0x72, 0x00,
 	0x61, 0x00, 0x18, 0x03, 0x55, 0x00, 0x53, 0x00,
 	0x42, 0x00, 0x2d, 0x00, 0x42, 0x00, 0x6c, 0x00,
 	0x61, 0x00, 0x73, 0x00, 0x74, 0x00, 0x65, 0x00,
-	0x72, 0x00, 0x12, 0x03, 0x43, 0x00, 0x30, 0x00, 
-	0x42, 0x00, 0x46, 0x00, 0x41, 0x00, 0x36, 0x00, 
-	0x44, 0x00, 0x37, 0x00, 0x02, 0x03, 0x01, 0x00, 
-	0x52, 0x45, 0x56, 0x42, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb5, 0xb2
-};
+	0x72, 0x00, 0x12, 0x03, 0x43, 0x00, 0x30, 0x00,
+	0x42, 0x00, 0x46, 0x00, 0x41, 0x00, 0x36, 0x00,
+	0x44, 0x00, 0x37, 0x00, 0x02, 0x03, 0x01, 0x00,
+	0x52, 0x45, 0x56, 0x42, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xb5, 0xb2};
 
 __code uint8_t DevDesc[] = {
 	0x12, 0x01, 0x00, 0x02,
@@ -64,7 +70,8 @@ __code uint8_t CfgDesc[] = {
 
 /* USB String Descriptors (optional) */
 unsigned char __code LangDes[] = {0x04, 0x03, 0x09, 0x04}; // EN_US
-unsigned char __code SerDes[] = {	//TODO: variable SN.
+unsigned char __code SerDes[] = {
+	//TODO: variable SN.
 	sizeof(SerDes), 0x03,
 	'C', 0, '0', 0, 'B', 0, 'F', 0, 'A', 0, '6', 0, 'D', 0, '7', 0 /* "C0BFA6D7" */
 };
@@ -81,8 +88,9 @@ unsigned char __code Manuf_Des[] = {
 
 volatile __idata uint8_t USBByteCount = 0;   //代表USB端点接收到的数据
 volatile __idata uint8_t USBBufOutPoint = 0; //取数据指针
-
+volatile __idata uint16_t sof_count = 0;
 volatile __idata uint8_t ep1_in_busy = 0; //上传端点是否忙标志
+volatile __idata uint8_t latency_timer = 4;
 
 /*******************************************************************************
 * Function Name  : USBDeviceCfg()
@@ -116,6 +124,7 @@ void USBDeviceIntCfg()
 	USB_INT_EN |= bUIE_SUSPEND;  //使能设备挂起中断
 	USB_INT_EN |= bUIE_TRANSFER; //使能USB传输完成中断
 	USB_INT_EN |= bUIE_BUS_RST;  //使能设备模式USB总线复位中断
+	USB_INT_EN |= bUIE_DEV_SOF;	 //For timeout count.
 	USB_INT_FG |= 0x1F;			 //清中断标志
 	IE_USB = 1;					 //使能USB中断
 	EA = 1;						 //允许单片机中断
@@ -146,6 +155,10 @@ void USBDeviceEndPointCfg()
 void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使用寄存器组1
 {
 	uint16_t len;
+	if ((USB_INT_ST & MASK_UIS_TOKEN) == UIS_TOKEN_SOF)
+	{
+		sof_count++;
+	}
 	if (UIF_TRANSFER) //USB传输完成标志
 	{
 		switch (USB_INT_ST & (MASK_UIS_TOKEN | MASK_UIS_ENDP))
@@ -172,7 +185,7 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 			{
 				uint8_t addr;
 				SetupLen = ((uint16_t)UsbSetupBuf->wLengthH << 8) | (UsbSetupBuf->wLengthL);
-				len = 0; // 默认为成功并且上传0长度
+				len = 0;			// 默认为成功并且上传0长度
 				vendor_control = 0; //默认非vendor
 				SetupReq = UsbSetupBuf->bRequest;
 				if ((UsbSetupBuf->bRequestType & USB_REQ_TYP_MASK) == USB_REQ_TYP_VENDOR)
@@ -206,19 +219,25 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 							addr = UsbSetupBuf->wIndexL << 1; //((req->wIndex >> 8) & 0x3F) << 1;
 							Ep0Buffer[0] = ftdi_rom[addr];
 							Ep0Buffer[1] = ftdi_rom[addr + 1];
+							len = 2;
 							break;
 						case FTDI_VEN_REQ_GET_MODEM_STA:
 							// return fixed modem status
 							Ep0Buffer[0] = FTDI_MODEM_STA_DUMMY0;
 							Ep0Buffer[1] = FTDI_MODEM_STA_DUMMY1;
+							len = 2;
+							break;
+						case FTDI_VEN_REQ_SET_LAT_TIMER:
+							latency_timer = UsbSetupBuf->wValueL;
+							len = 0;
 							break;
 						default:
 							// return dummy data
 							Ep0Buffer[0] = 0x0;
 							Ep0Buffer[1] = 0x0;
+							len = 2;
 							break;
 						}
-						len = 2;
 					}
 				}
 				else if ((UsbSetupBuf->bRequestType & USB_REQ_TYP_MASK) == USB_REQ_TYP_STANDARD)
@@ -451,7 +470,7 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 				UEP0_CTRL ^= bUEP_T_TOG; //同步标志位翻转
 				break;
 			case USB_SET_ADDRESS:
-				if(!vendor_control)
+				if (!vendor_control)
 				{
 					USB_DEV_AD = USB_DEV_AD & bUDA_GP_BIT | SetupLen;
 					UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
@@ -497,10 +516,10 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 		USB_DEV_AD = 0x00;
 		UIF_SUSPEND = 0;
 		UIF_TRANSFER = 0;
-		UIF_BUS_RST = 0;	   //清中断标志
-		
-		USBByteCount = 0;	  //USB端点收到的长度
-		UsbConfig = 0;		   //清除配置值
+		UIF_BUS_RST = 0; //清中断标志
+
+		USBByteCount = 0; //USB端点收到的长度
+		UsbConfig = 0;	//清除配置值
 		ep1_in_busy = 0;
 	}
 	if (UIF_SUSPEND) //USB总线挂起/唤醒完成
@@ -531,10 +550,21 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 }
 
 __idata uint8_t receive_buffer[64];
+__xdata uint8_t transmit_buffer[128];
+__idata uint8_t transmit_buffer_in_offset;
+__idata uint8_t transmit_buffer_out_offset;
+
 //主函数
 void main()
 {
 	uint8_t length = 0;
+	uint8_t read_buffer_index = 0;
+	uint8_t shift_count = 0;
+	uint8_t operand = 0;
+	uint8_t shift_en = 0;
+	uint8_t read_en = 0;
+	uint16_t timeout_count = 0;
+
 	CfgFsys();   //CH559时钟选择配置
 	mDelaymS(5); //修改主频等待内部晶振稳定,必加
 
@@ -546,7 +576,7 @@ void main()
 		{
 			EA = 0;
 			mDelaymS(100);
-			(*(void (*)(void))0x3800)();	// goto bootloader.
+			(*(void (*)(void))0x3800)(); // goto bootloader.
 			while (1)
 				;
 		}
@@ -555,15 +585,28 @@ void main()
 	USBDeviceCfg();
 	USBDeviceEndPointCfg(); //端点配置
 	USBDeviceIntCfg();		//中断初始化
+
+	//P1.4 P1.5 P1.6 output push-pull.
+	//P1.7 input.
+	P1_MOD_OC = 0x80;
+	P1_DIR_PU = 0xf0;
+	TDO = 1;
+
 	UEP0_T_LEN = 0;
 	UEP1_T_LEN = 0; //预使用发送长度一定要清空
-	UEP2_T_LEN = 0;
+
 	Ep1Buffer[0] = FTDI_MODEM_STA_DUMMY0;
 	Ep1Buffer[1] = FTDI_MODEM_STA_DUMMY1;
 
+	transmit_buffer_in_offset = 0;
+	transmit_buffer_out_offset = 0;
+
+	length = 0;
+	send_dummy = 1;
+
 	while (1)
 	{
-		if(UsbConfig)
+		if (UsbConfig)
 		{
 			if (USBByteCount) //USB接收端点有数据
 			{
@@ -573,18 +616,168 @@ void main()
 				USBByteCount = 0;
 			}
 
+			read_buffer_index = 0;
+			while (read_buffer_index < length)
+			{
+				operand = receive_buffer[read_buffer_index];
+				read_buffer_index++;
+				//TODO: Assembly implementation for IO control.
+				if (!shift_count)
+				{
+					shift_en = operand & 0x80;
+					read_en = operand & 0x40;
+					if (shift_en)
+					{
+						shift_count = operand & 0x3f;
+					}
+					else if (read_en)
+					{
+						transmit_buffer[transmit_buffer_in_offset] = TDO;
+						transmit_buffer_in_offset++;
+						transmit_buffer_in_offset %= sizeof(transmit_buffer);
+					}
+					else
+					{
+						TDI = operand & 0x10;
+						TMS = operand & 0x02;
+						TCK = operand & 0x01;
+					}
+				}
+				else
+				{
+					if (read_en)
+					{
+						uint8_t data = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 0;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 1;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 2;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 3;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 4;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 5;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 6;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						data |= TDO << 7;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						transmit_buffer[transmit_buffer_in_offset] = data;
+						transmit_buffer_in_offset++;
+						transmit_buffer_in_offset %= sizeof(transmit_buffer);
+					}
+					else
+					{
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+
+						TDI = operand & 0x01;
+						TCK = 1;
+						operand >>= 1;
+						TCK = 0;
+					}
+					shift_count--;
+				}
+			}
+
 			if (ep1_in_busy == 0) //端点不繁忙（空闲后的第一包数据，只用作触发上传）
 			{
-				length = 2;
-				if (length > 0)
+				int8_t data_len = transmit_buffer_in_offset - transmit_buffer_out_offset;
+				data_len = data_len < 0 ? sizeof(transmit_buffer) + data_len : data_len;
+				if (data_len > 0) // 2 for modem bytes.
 				{
-					Ep1Buffer[0] = FTDI_MODEM_STA_DUMMY0;
-					Ep1Buffer[1] = FTDI_MODEM_STA_DUMMY1;
-
+					uint8_t i;
+					uint8_t send_len = (data_len >= 62) ? 62 : data_len;
+					for (i = 0; i < send_len; i++)
+					{
+						Ep1Buffer[i + 2] = transmit_buffer[transmit_buffer_out_offset];
+						transmit_buffer_out_offset++;
+						transmit_buffer_out_offset %= sizeof(transmit_buffer);
+					}
 					ep1_in_busy = 1;
-					UEP1_T_LEN = length;									 //预使用发送长度一定要清空
+					UEP1_T_LEN = send_len + 2;
 					UEP1_CTRL = UEP1_CTRL & ~MASK_UEP_T_RES | UEP_T_RES_ACK; //应答ACK
-					//}
+				}
+				else if ((sof_count - timeout_count) > latency_timer)
+				{
+					timeout_count = sof_count;
+					ep1_in_busy = 1;
+					UEP1_T_LEN = 2;											 //预使用发送长度一定要清空
+					UEP1_CTRL = UEP1_CTRL & ~MASK_UEP_T_RES | UEP_T_RES_ACK; //应答ACK
+				}
+				else if(send_dummy)
+				{
+					send_dummy--;
+					ep1_in_busy = 1;
+					UEP1_T_LEN = 2;											 //预使用发送长度一定要清空
+					UEP1_CTRL = UEP1_CTRL & ~MASK_UEP_T_RES | UEP_T_RES_ACK; //应答ACK
 				}
 			}
 		}
