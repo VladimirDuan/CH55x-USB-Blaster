@@ -13,8 +13,8 @@
 
 #include "ftdi.h"
 
-#define BTN_PIN 4 //for bootloader entry.
-SBIT(BTN, 0x90, BTN_PIN);
+#define BTN_PIN 2 //P3.2 for bootloader entry.
+SBIT(BTN, 0xB0, BTN_PIN);
 
 SBIT(TMS, 0x90, 4);
 SBIT(TCK, 0x90, 5);
@@ -566,8 +566,8 @@ void main()
 	uint16_t timeout_count = 0;
 
 	CfgFsys();   //CH559时钟选择配置
-	mDelaymS(5); //修改主频等待内部晶振稳定,必加
-
+	//mDelaymS(5); //修改主频等待内部晶振稳定,必加
+	BTN = 1;
 	mDelaymS(50);
 	if (BTN == 0)
 	{
@@ -608,6 +608,7 @@ void main()
 	{
 		if (UsbConfig)
 		{
+			length = 0;
 			if (USBByteCount) //USB接收端点有数据
 			{
 				memcpy(receive_buffer, Ep2Buffer, USBByteCount);
@@ -622,7 +623,7 @@ void main()
 				operand = receive_buffer[read_buffer_index];
 				read_buffer_index++;
 				//TODO: Assembly implementation for IO control.
-				if (!shift_count)
+				if (shift_count == 0)
 				{
 					shift_en = operand & 0x80;
 					read_en = operand & 0x40;
@@ -632,9 +633,12 @@ void main()
 					}
 					else if (read_en)
 					{
+						TDI = operand & 0x10;
+						TMS = operand & 0x02;
+						TCK = operand & 0x01;
 						transmit_buffer[transmit_buffer_in_offset] = TDO;
 						transmit_buffer_in_offset++;
-						transmit_buffer_in_offset %= sizeof(transmit_buffer);
+						transmit_buffer_in_offset &= 0x7f;// %= sizeof(transmit_buffer);
 					}
 					else
 					{
@@ -645,6 +649,7 @@ void main()
 				}
 				else
 				{
+					shift_count--;
 					if (read_en)
 					{
 						uint8_t data = 0;
@@ -699,7 +704,7 @@ void main()
 
 						transmit_buffer[transmit_buffer_in_offset] = data;
 						transmit_buffer_in_offset++;
-						transmit_buffer_in_offset %= sizeof(transmit_buffer);
+						transmit_buffer_in_offset &= 0x7f;//%= sizeof(transmit_buffer);
 					}
 					else
 					{
@@ -743,14 +748,13 @@ void main()
 						operand >>= 1;
 						TCK = 0;
 					}
-					shift_count--;
 				}
 			}
 
 			if (ep1_in_busy == 0) //端点不繁忙（空闲后的第一包数据，只用作触发上传）
 			{
 				int8_t data_len = transmit_buffer_in_offset - transmit_buffer_out_offset;
-				data_len = data_len < 0 ? sizeof(transmit_buffer) + data_len : data_len;
+				data_len = data_len < 0 ? 128 + data_len : data_len;
 				if (data_len > 0) // 2 for modem bytes.
 				{
 					uint8_t i;
@@ -759,7 +763,7 @@ void main()
 					{
 						Ep1Buffer[i + 2] = transmit_buffer[transmit_buffer_out_offset];
 						transmit_buffer_out_offset++;
-						transmit_buffer_out_offset %= sizeof(transmit_buffer);
+						transmit_buffer_out_offset &= 0x7f;// %= sizeof(transmit_buffer);
 					}
 					ep1_in_busy = 1;
 					UEP1_T_LEN = send_len + 2;
