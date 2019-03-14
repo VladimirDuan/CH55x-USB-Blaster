@@ -90,7 +90,7 @@ volatile __idata uint8_t USBByteCount = 0;   //代表USB端点接收到的数据
 volatile __idata uint8_t USBBufOutPoint = 0; //取数据指针
 volatile __idata uint16_t sof_count = 0;
 volatile __idata uint8_t ep1_in_busy = 0; //上传端点是否忙标志
-volatile __idata uint8_t latency_timer = 4;
+volatile __idata uint8_t latency_timer = 20;
 
 /*******************************************************************************
 * Function Name  : USBDeviceCfg()
@@ -549,10 +549,10 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 	}
 }
 
-__idata uint8_t receive_buffer[64];
-__xdata uint8_t transmit_buffer[128];
 __idata uint8_t transmit_buffer_in_offset;
 __idata uint8_t transmit_buffer_out_offset;
+__idata uint8_t receive_buffer[64];
+__xdata uint8_t transmit_buffer[128];
 
 //主函数
 void main()
@@ -657,95 +657,79 @@ void main()
 						TDI = operand & 0x01;
 						data |= TDO << 0;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x02;
 						data |= TDO << 1;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x04;
 						data |= TDO << 2;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x08;
 						data |= TDO << 3;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x10;
 						data |= TDO << 4;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x20;
 						data |= TDO << 5;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x40;
 						data |= TDO << 6;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x80;
 						data |= TDO << 7;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
 						transmit_buffer[transmit_buffer_in_offset] = data;
 						transmit_buffer_in_offset++;
-						transmit_buffer_in_offset &= 0x7f;//%= sizeof(transmit_buffer);
+						transmit_buffer_in_offset &= 0x7f;
 					}
 					else
 					{
 						TDI = operand & 0x01;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x02;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x04;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x08;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x10;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x20;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x40;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 
-						TDI = operand & 0x01;
+						TDI = operand & 0x80;
 						TCK = 1;
-						operand >>= 1;
 						TCK = 0;
 					}
 				}
