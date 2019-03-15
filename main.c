@@ -16,14 +16,29 @@
 #define BTN_PIN 2 //P3.2 for bootloader entry.
 SBIT(BTN, 0xB0, BTN_PIN);
 
+SBIT(LED, 0x90, 1);
+
 SBIT(TMS, 0x90, 4);
 SBIT(TCK, 0x90, 5);
 SBIT(TDI, 0x90, 6);
 SBIT(TDO, 0x90, 7);
 
+SBIT(P2B7, 0xA0, 7);
+SBIT(P2B6, 0xA0, 6);
+SBIT(P2B5, 0xA0, 5);
+SBIT(P2B4, 0xA0, 4);
+SBIT(P2B3, 0xA0, 3);
+SBIT(P2B2, 0xA0, 2);
+SBIT(P2B1, 0xA0, 1);
+SBIT(P2B0, 0xA0, 0);
+
+
+__xdata uint8_t receive_buffer[64];
+__xdata uint8_t transmit_buffer[128];
 __xdata __at(0x0100) uint8_t Ep0Buffer[0x08]; //端点0 OUT&IN缓冲区，必须是偶地址
 __xdata __at(0x0140) uint8_t Ep1Buffer[0x40]; //端点1 IN缓冲区
 __xdata __at(0x0180) uint8_t Ep2Buffer[0x40]; //端点2 OUT缓冲区,必须是偶地址
+
 
 uint16_t SetupLen;
 uint8_t SetupReq, Count, UsbConfig;
@@ -90,7 +105,7 @@ volatile __idata uint8_t USBByteCount = 0;   //代表USB端点接收到的数据
 volatile __idata uint8_t USBBufOutPoint = 0; //取数据指针
 volatile __idata uint16_t sof_count = 0;
 volatile __idata uint8_t ep1_in_busy = 0; //上传端点是否忙标志
-volatile __idata uint8_t latency_timer = 20;
+volatile __idata uint8_t latency_timer = 4;
 
 /*******************************************************************************
 * Function Name  : USBDeviceCfg()
@@ -551,8 +566,6 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 
 __idata uint8_t transmit_buffer_in_offset;
 __idata uint8_t transmit_buffer_out_offset;
-__idata uint8_t receive_buffer[64];
-__xdata uint8_t transmit_buffer[128];
 
 //主函数
 void main()
@@ -586,10 +599,10 @@ void main()
 	USBDeviceEndPointCfg(); //端点配置
 	USBDeviceIntCfg();		//中断初始化
 
-	//P1.4 P1.5 P1.6 output push-pull.
+	//P1.1 P1.4 P1.5 P1.6 output push-pull.
 	//P1.7 input.
 	P1_MOD_OC = 0x80;
-	P1_DIR_PU = 0xf0;
+	P1_DIR_PU = 0xf2;
 	TDO = 1;
 
 	UEP0_T_LEN = 0;
@@ -603,6 +616,7 @@ void main()
 
 	length = 0;
 	send_dummy = 1;
+	LED = 0;
 
 	while (1)
 	{
@@ -611,7 +625,23 @@ void main()
 			length = 0;
 			if (USBByteCount) //USB接收端点有数据
 			{
-				memcpy(receive_buffer, Ep2Buffer, USBByteCount);
+				//memcpy(receive_buffer, Ep2Buffer, USBByteCount);
+				
+				__asm
+					push ar7
+					inc _XBUS_AUX	//dptr1
+					mov	dptr, #_receive_buffer	//target receive_buffer
+					dec _XBUS_AUX	//dptr0
+					mov	dptr, #_Ep2Buffer	//source Ep2Buffer
+					mov ar7, _USBByteCount
+				1$:	
+					movx a, @dptr
+					inc dptr
+					.db #0xA5	//WCH 0xA5 instruction
+					djnz ar7, 1$
+					pop ar7
+				__endasm;
+				
 				UEP2_CTRL = UEP2_CTRL & ~MASK_UEP_R_RES | UEP_R_RES_ACK;
 				length = USBByteCount;
 				USBByteCount = 0;
@@ -620,31 +650,34 @@ void main()
 			read_buffer_index = 0;
 			while (read_buffer_index < length)
 			{
-				operand = receive_buffer[read_buffer_index];
+				P2 = receive_buffer[read_buffer_index];
 				read_buffer_index++;
-				//TODO: Assembly implementation for IO control.
+				//TODO: Assembly implementation for IO control. 
+				//TODO: Use hardware spi for shift control.
 				if (shift_count == 0)
 				{
-					shift_en = operand & 0x80;
-					read_en = operand & 0x40;
+					shift_en = P2B7;
+					read_en = P2B6;
 					if (shift_en)
 					{
-						shift_count = operand & 0x3f;
+						shift_count = P2 & 0x3f;
 					}
 					else if (read_en)
 					{
-						TDI = operand & 0x10;
-						TMS = operand & 0x02;
-						TCK = operand & 0x01;
+						LED = P2B5;
+						TDI = P2B4;
+						TMS = P2B1;
+						TCK = P2B0;
 						transmit_buffer[transmit_buffer_in_offset] = TDO;
 						transmit_buffer_in_offset++;
 						transmit_buffer_in_offset &= 0x7f;// %= sizeof(transmit_buffer);
 					}
 					else
 					{
-						TDI = operand & 0x10;
-						TMS = operand & 0x02;
-						TCK = operand & 0x01;
+						LED = P2B5;
+						TDI = P2B4;
+						TMS = P2B1;
+						TCK = P2B0;
 					}
 				}
 				else
@@ -652,83 +685,81 @@ void main()
 					shift_count--;
 					if (read_en)
 					{
-						uint8_t data = 0;
-
-						TDI = operand & 0x01;
-						data |= TDO << 0;
+						TDI = P2B0;
+						P2B0 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x02;
-						data |= TDO << 1;
+						TDI = P2B1;
+						P2B1 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x04;
-						data |= TDO << 2;
+						TDI = P2B2;
+						P2B2 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x08;
-						data |= TDO << 3;
+						TDI = P2B3;
+						P2B3 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x10;
-						data |= TDO << 4;
+						TDI = P2B4;
+						P2B4 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x20;
-						data |= TDO << 5;
+						TDI = P2B5;
+						P2B5 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x40;
-						data |= TDO << 6;
+						TDI = P2B6;
+						P2B6 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x80;
-						data |= TDO << 7;
+						TDI = P2B7;
+						P2B7 = TDO;
 						TCK = 1;
 						TCK = 0;
 
-						transmit_buffer[transmit_buffer_in_offset] = data;
+						transmit_buffer[transmit_buffer_in_offset] = P2;
 						transmit_buffer_in_offset++;
 						transmit_buffer_in_offset &= 0x7f;
 					}
 					else
 					{
-						TDI = operand & 0x01;
+						TDI = P2B0;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x02;
+						TDI = P2B1;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x04;
+						TDI = P2B2;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x08;
+						TDI = P2B3;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x10;
+						TDI = P2B4;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x20;
+						TDI = P2B5;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x40;
+						TDI = P2B6;
 						TCK = 1;
 						TCK = 0;
 
-						TDI = operand & 0x80;
+						TDI = P2B7;
 						TCK = 1;
 						TCK = 0;
 					}
