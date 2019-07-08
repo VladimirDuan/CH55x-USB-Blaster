@@ -17,11 +17,17 @@
 SBIT(BTN, 0xB0, BTN_PIN);
 
 SBIT(LED, 0x90, 1);
-
+/*
 SBIT(TMS, 0x90, 4);
 SBIT(TCK, 0x90, 5);
 SBIT(TDI, 0x90, 6);
 SBIT(TDO, 0x90, 7);
+*/
+
+SBIT(TMS, 0x90, 4);
+SBIT(TCK, 0x90, 7);
+SBIT(TDI, 0x90, 5);
+SBIT(TDO, 0x90, 6);
 
 SBIT(P2B7, 0xA0, 7);
 SBIT(P2B6, 0xA0, 6);
@@ -33,8 +39,8 @@ SBIT(P2B1, 0xA0, 1);
 SBIT(P2B0, 0xA0, 0);
 
 
-__xdata uint8_t receive_buffer[64];
-__xdata uint8_t transmit_buffer[128];
+__xdata __at(0x0000) uint8_t transmit_buffer[128];	//fixed address for ringbuf
+__xdata __at(0x0080) uint8_t receive_buffer[64];
 __xdata __at(0x0100) uint8_t Ep0Buffer[0x08]; //端点0 OUT&IN缓冲区，必须是偶地址
 __xdata __at(0x0140) uint8_t Ep1Buffer[0x40]; //端点1 IN缓冲区
 __xdata __at(0x0180) uint8_t Ep2Buffer[0x40]; //端点2 OUT缓冲区,必须是偶地址
@@ -566,6 +572,7 @@ void DeviceInterrupt(void) __interrupt(INT_NO_USB) //USB中断服务程序,使�
 
 __idata uint8_t transmit_buffer_in_offset;
 __idata uint8_t transmit_buffer_out_offset;
+__idata uint8_t send_len;
 
 //主函数
 void main()
@@ -601,7 +608,7 @@ void main()
 
 	//P1.1 P1.4 P1.5 P1.6 output push-pull.
 	//P1.7 input.
-	P1_MOD_OC = 0x80;
+	P1_MOD_OC = 0x40;
 	P1_DIR_PU = 0xf2;
 	TDO = 1;
 
@@ -629,6 +636,7 @@ void main()
 				
 				__asm
 					push ar7
+					push a
 					inc _XBUS_AUX	//dptr1
 					mov	dptr, #_receive_buffer	//target receive_buffer
 					dec _XBUS_AUX	//dptr0
@@ -639,6 +647,7 @@ void main()
 					inc dptr
 					.db #0xA5	//WCH 0xA5 instruction
 					djnz ar7, 1$
+					pop a
 					pop ar7
 				__endasm;
 				
@@ -773,13 +782,37 @@ void main()
 				if (data_len > 0) // 2 for modem bytes.
 				{
 					uint8_t i;
-					uint8_t send_len = (data_len >= 62) ? 62 : data_len;
+					send_len = (data_len >= 62) ? 62 : data_len;
+					
 					for (i = 0; i < send_len; i++)
 					{
 						Ep1Buffer[i + 2] = transmit_buffer[transmit_buffer_out_offset];
 						transmit_buffer_out_offset++;
 						transmit_buffer_out_offset &= 0x7f;// %= sizeof(transmit_buffer);
 					}
+					/*
+					__asm
+					push ar7
+					push a
+					inc _XBUS_AUX	//dptr1
+					mov	dptr, #(_Ep1Buffer + 0x0002)	//target receive_buffer
+					dec _XBUS_AUX	//dptr0
+					mov dph, #(_transmit_buffer >> 8)	//fixed address 0x00XX
+					mov dpl, _transmit_buffer_out_offset
+					mov ar7, _send_len
+				2$:	
+					movx a, @dptr
+					.db #0xA5	//WCH 0xA5 instruction
+					inc _transmit_buffer_out_offset	//idata
+					anl _transmit_buffer_out_offset, #0x7f	//ring operation
+					mov dph, #(_transmit_buffer >> 8)	//fixed address 0x00XX
+					mov dpl, _transmit_buffer_out_offset
+					djnz ar7, 2$
+					pop a
+					pop ar7
+					__endasm;
+					*/
+					
 					ep1_in_busy = 1;
 					UEP1_T_LEN = send_len + 2;
 					UEP1_CTRL = UEP1_CTRL & ~MASK_UEP_T_RES | UEP_T_RES_ACK; //应答ACK
